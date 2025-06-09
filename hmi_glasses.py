@@ -1,6 +1,6 @@
 import pywinusb.hid as hid
 
-class GlassesUI:
+class GlassesHMI:
     def __init__(self, vendor_id, product_id):
         self.vendor_id = vendor_id
         self.product_id = product_id
@@ -84,7 +84,7 @@ THINKREALITY_PRODUCT_ID = 0xB813
 if __name__ == "__main__":
 
     # Initialize the GlassesUI with the appropriate vendor and product IDs
-    glasses = GlassesUI(
+    glasses = GlassesHMI(
         vendor_id=THINKREALITY_VENDOR_ID, 
         product_id=THINKREALITY_PRODUCT_ID
     ) 
