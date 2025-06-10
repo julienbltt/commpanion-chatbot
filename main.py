@@ -87,7 +87,7 @@ class VoiceAssistant:
             # Réponse LLM
             print("🤖 LLM responding wait...")
             tic = time.time()
-            get_lmstudio_response(prompt, model="deepseek/deepseek-r1-0528-qwen3-8b")
+            get_lmstudio_response(prompt)
             tac = time.time()
             print(f"✅ LLM finished, time: {(tac-tic):.6f} seconds")
             
