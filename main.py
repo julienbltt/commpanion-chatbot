@@ -58,6 +58,7 @@ class VoiceAssistant:
         finally:
             with self.processing_lock:
                 self.is_processing = False
+            print("✅ Prêt pour la prochaine commande\n")
     
     def on_plus_button(self, event):
         """Callback pour le bouton +"""
@@ -72,27 +73,38 @@ class VoiceAssistant:
     def process_voice_command(self):
         """Traite une commande vocale complète"""
         try:
+            # Petit délai pour s'assurer que les ressources sont libres
+            time.sleep(0.2)
+            
             # Transcription audio
             tic = time.time()
             prompt = transcribe_stream()
             tac = time.time()
             
             print(f"⚡ Whisper duration: {(tac-tic):.6f} seconds")
-            print(f"🎯 Understood: {prompt}")
+            print(f"🎯 Understood: '{prompt}'")
             
-            if not prompt.strip():
-                print("❌ No speech detected. Try again.")
+            # Vérifier si on a bien une transcription
+            if not prompt or not prompt.strip():
+                print("❌ No speech detected or empty transcription. Try again.")
+                return
+            
+            # Vérifier la longueur minimale pour éviter les faux positifs
+            if len(prompt.strip()) < 2:
+                print("❌ Transcription trop courte, probablement du bruit. Try again.")
                 return
             
             # Réponse LLM
-            print("🤖 LLM responding wait...")
+            print("🤖 LLM responding, please wait...")
             tic = time.time()
-            get_lmstudio_response(prompt)
+            response = get_lmstudio_response(prompt)
             tac = time.time()
             print(f"✅ LLM finished, time: {(tac-tic):.6f} seconds")
             
         except Exception as e:
             print(f"❌ Error in voice processing: {e}")
+            import traceback
+            traceback.print_exc()
     
     def run_with_keyboard_fallback(self):
         """Lance le système avec fallback clavier si les lunettes ne marchent pas"""
@@ -116,12 +128,26 @@ class VoiceAssistant:
                 
                 # Si on arrive ici, c'est qu'ENTER a été pressé
                 print("⌨️  Déclenchement clavier détecté")
-                self.process_voice_command()
+                
+                # Vérifier si on n'est pas déjà en train de traiter
+                with self.processing_lock:
+                    if self.is_processing:
+                        print("🔄 Traitement en cours, veuillez patienter...")
+                        continue
+                    self.is_processing = True
+                
+                try:
+                    self.process_voice_command()
+                finally:
+                    with self.processing_lock:
+                        self.is_processing = False
                         
         except KeyboardInterrupt:
             print("\n🛑 Exiting...")
         except Exception as e:
             print(f"❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             if self.glasses:
                 self.glasses.close()
@@ -144,6 +170,8 @@ class VoiceAssistant:
             print("\n🛑 Exiting...")
         except Exception as e:
             print(f"❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             if self.glasses:
                 self.glasses.close()
@@ -169,3 +197,5 @@ if __name__ == "__main__":
         print("\n🛑 Programme interrompu")
     except Exception as e:
         print(f"❌ Erreur: {e}")
+        import traceback
+        traceback.print_exc()
