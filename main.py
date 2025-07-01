@@ -1,171 +1,119 @@
-import keyboard
-from stt import transcribe_stream
-from llm import get_lmstudio_response
-import time
 import threading
-from hmi_glasses_event import GlassesHMI, ButtonEvent
+import llm
+from wakeword_detector import WakeWordDetector
+import time
+import stt
+from recorder import AudioRecorder
+from old_version.hmi_glasses_event import GlassesHMI, ButtonEvent
+
 
 class VoiceAssistant:
     def __init__(self):
         self.glasses = None
         self.is_processing = False
         self.processing_lock = threading.Lock()
-        
-        # Configuration des lunettes
+
+        # Configuration of the glasses
         self.VENDOR_ID = 0x17EF
         self.PRODUCT_ID = 0xB813
-        
-    def setup_glasses(self):
-        """Configure et connecte les lunettes"""
-        try:
-            self.glasses = GlassesHMI(
-                vendor_id=self.VENDOR_ID,
-                product_id=self.PRODUCT_ID
-            )
-            
-            # Enregistrer les callbacks pour les événements
-            self.glasses.register_callback(ButtonEvent.CENTER, self.on_voice_trigger)
-            self.glasses.register_callback(ButtonEvent.CENTER_SOUND, self.on_voice_trigger)
-            
-            # Boutons additionnels avec autres fonctions
-            self.glasses.register_callback(ButtonEvent.PLUS, self.on_plus_button)
-            self.glasses.register_callback(ButtonEvent.MINUS, self.on_minus_button)
-            
-            self.glasses.find()
-            self.glasses.open()
-            
-            print("✅ Lunettes connectées et prêtes!")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Erreur lors de la configuration des lunettes: {e}")
-            return False
-    
-    def on_voice_trigger(self, event):
-        """Callback déclenché quand on appuie sur le bouton center"""
+
+        # Initialize all modules
+        self.recorder = AudioRecorder()
+        self.llm = llm.LMStudioResponder(
+            model_name="phi-3-mini-4k-instruct",
+            system_prompt="You are a voice assistant, so you have to give a short but friendly answer"
+        )
+        self.stt_app = stt.SpeechToTextApplication("audio")
+
+        # Download wake word model once (if needed)
+        WakeWordDetector.download_models()
+
+        # Initialize wake word detector
+        self.detector = WakeWordDetector(['alexa'])
+        self.detector.register_callback('alexa', self.on_wake_word_detected)
+
+        # Auto-select default microphone
+        default_mic = self.recorder.mic_selector.get_default_microphone()
+        if default_mic:
+            self.recorder.set_microphone(default_mic["index"])
+            print(f"🎚️ Default microphone selected: {default_mic['name']}")
+        else:
+            print("❌ No microphones available.")
+
+    def on_voice_trigger(self, event=None):
+        """Callback for button or wake word"""
         with self.processing_lock:
             if self.is_processing:
-                print("🔄 Traitement en cours, veuillez patienter...")
+                print("🔄 Already processing. Please wait...")
                 return
-            
             self.is_processing = True
-        
+
         try:
-            print("🎤 Bouton détecté - Début de l'écoute...")
+            print("🎤 Trigger detected — start listening...")
             self.process_voice_command()
         except Exception as e:
-            print(f"❌ Erreur lors du traitement vocal: {e}")
+            print(f"❌ Error during voice processing: {e}")
         finally:
             with self.processing_lock:
                 self.is_processing = False
-            print("✅ Prêt pour la prochaine commande\n")
-    
-    def on_plus_button(self, event):
-        """Callback pour le bouton +"""
-        print("➕ Bouton + pressé - Fonction personnalisée")
-        # Vous pouvez ajouter ici d'autres fonctionnalités
-        
-    def on_minus_button(self, event):
-        """Callback pour le bouton -"""
-        print("➖ Bouton - pressé - Fonction personnalisée")
-        # Vous pouvez ajouter ici d'autres fonctionnalités
-    
+            print("✅ Ready for next command!\n")
+
     def process_voice_command(self):
-        """Traite une commande vocale complète"""
+        """Record, transcribe, and handle LLM response"""
         try:
-            # Petit délai pour s'assurer que les ressources sont libres
-            time.sleep(0.2)
-            
-            # Transcription audio
+            time.sleep(0.2)  # Small delay to stabilize
+
+            print("Starting recording...")
+            self.recorder.start_recording()
+            while self.recorder.is_recording:
+                time.sleep(0.1)
+            print("Recording finished!")
+            self.recorder.save_recording("audio/last_rec.wav")
+            self.recorder.cleanup()
+
             tic = time.time()
-            prompt = transcribe_stream()
-            tac = time.time()
-            
-            print(f"⚡ Whisper duration: {(tac-tic):.6f} seconds")
-            print(f"🎯 Understood: '{prompt}'")
-            
-            # Vérifier si on a bien une transcription
+
+            print("Transcribing audio file...")
+            prompt = self.stt_app.transcribe()
+            print(f"Transcription: {prompt}")
+
             if not prompt or not prompt.strip():
                 print("❌ No speech detected or empty transcription. Try again.")
                 return
-            
-            # Vérifier la longueur minimale pour éviter les faux positifs
+
             if len(prompt.strip()) < 2:
-                print("❌ Transcription trop courte, probablement du bruit. Try again.")
+                print("❌ Transcription too short, probably noise. Try again.")
                 return
-            
-            # Réponse LLM
+
             print("🤖 LLM responding, please wait...")
-            tic = time.time()
-            response = get_lmstudio_response(prompt)
+            start = time.time()
+            self.llm.respond_and_speak(prompt)
+            stop = time.time()
+            print(f"✅ LLM done in {(stop - start):.2f} seconds")
+
             tac = time.time()
-            print(f"✅ LLM finished, time: {(tac-tic):.6f} seconds")
-            
+            print(f"Total time: {(tac - tic):.2f} seconds")
+
         except Exception as e:
             print(f"❌ Error in voice processing: {e}")
             import traceback
             traceback.print_exc()
-    
-    def run_with_keyboard_fallback(self):
-        """Lance le système avec fallback clavier si les lunettes ne marchent pas"""
-        glasses_available = self.setup_glasses()
-        
-        if glasses_available:
-            print("🕶️  Mode lunettes activé - Appuyez sur le bouton center pour parler")
-            print("⌨️  Vous pouvez aussi utiliser ENTER comme fallback")
-        else:
-            print("⌨️  Mode clavier uniquement - Appuyez sur ENTER pour parler")
-        
+
+    def on_wake_word_detected(self, wakeword, score):
+        print(f"🔊 Wake word '{wakeword}' detected (score: {score:.2f})")
+        self.on_voice_trigger()
+
+    def run(self):
+        """Start system with wake word only"""
+        print("✅ Voice assistant initialized. Waiting for wake word ('alexa')...")
+
         try:
-            while True:
-                if glasses_available:
-                    print("\n👆 Appuyez sur le bouton des lunettes ou ENTER pour commencer...")
-                else:
-                    print("\n👆 Press ENTER to start listening.")
-                
-                # Attendre soit l'événement des lunettes soit ENTER
-                keyboard.wait("enter")
-                
-                # Si on arrive ici, c'est qu'ENTER a été pressé
-                print("⌨️  Déclenchement clavier détecté")
-                
-                # Vérifier si on n'est pas déjà en train de traiter
-                with self.processing_lock:
-                    if self.is_processing:
-                        print("🔄 Traitement en cours, veuillez patienter...")
-                        continue
-                    self.is_processing = True
-                
-                try:
-                    self.process_voice_command()
-                finally:
-                    with self.processing_lock:
-                        self.is_processing = False
-                        
-        except KeyboardInterrupt:
-            print("\n🛑 Exiting...")
-        except Exception as e:
-            print(f"❌ Error: {e}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            if self.glasses:
-                self.glasses.close()
-    
-    def run_glasses_only(self):
-        """Lance le système uniquement avec les lunettes"""
-        if not self.setup_glasses():
-            print("❌ Impossible de connecter les lunettes. Utilisez run_with_keyboard_fallback()")
-            return
-        
-        print("🕶️  Mode lunettes uniquement - Appuyez sur le bouton center pour parler")
-        print("✋ Ctrl+C pour quitter")
-        
-        try:
-            # Maintenir le programme en vie
+            # Start wake word detector in a separate thread to avoid blocking
+            self.detector.start()
+
             while True:
                 time.sleep(1)
-                        
+
         except KeyboardInterrupt:
             print("\n🛑 Exiting...")
         except Exception as e:
@@ -173,29 +121,22 @@ class VoiceAssistant:
             import traceback
             traceback.print_exc()
         finally:
+            print("Cleaning up...")
+            self.detector.stop()
+            self.detector.cleanup()
             if self.glasses:
                 self.glasses.close()
 
-# Point d'entrée principal
+
 if __name__ == "__main__":
     assistant = VoiceAssistant()
-    
-    # Choisir le mode de fonctionnement
-    print("Choisissez le mode de fonctionnement:")
-    print("1. Lunettes + Clavier (fallback)")
-    print("2. Lunettes uniquement")
-    
+
     try:
-        choice = input("Votre choix (1 ou 2): ").strip()
-        
-        if choice == "2":
-            assistant.run_glasses_only()
-        else:
-            assistant.run_with_keyboard_fallback()
-            
+        assistant.run()
+
     except KeyboardInterrupt:
-        print("\n🛑 Programme interrompu")
+        print("\n🛑 Program interrupted")
     except Exception as e:
-        print(f"❌ Erreur: {e}")
+        print(f"❌ Error: {e}")
         import traceback
         traceback.print_exc()
