@@ -1,6 +1,9 @@
 import pyttsx3
 
 class _TTS:
+    '''
+    A wrapper around pyttsx3 to speaking response.
+    '''
 
     def __init__(self):
         self.engine = pyttsx3.init()
